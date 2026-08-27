@@ -725,3 +725,25 @@ int do_type_lt(const type2tc &side1, const type2tc &side2)
   else
     return side1->lt(*side2.get());
 }
+
+static expr2tc strip_typecasts(const expr2tc &e)
+{
+  expr2tc r = e;
+  while (is_typecast2t(r))
+    r = to_typecast2t(r).from;
+  return r;
+}
+
+irep_idt quantifier_bound_name(const expr2tc &binder)
+{
+  expr2tc sym = strip_typecasts(binder);
+  if (is_address_of2t(sym))
+    sym = to_address_of2t(sym).ptr_obj;
+  return is_symbol2t(sym) ? to_symbol2t(sym).thename : irep_idt();
+}
+
+irep_idt quantifier_direct_bound_name(const expr2tc &binder)
+{
+  const expr2tc sym = strip_typecasts(binder);
+  return is_address_of2t(sym) ? quantifier_bound_name(sym) : irep_idt();
+}

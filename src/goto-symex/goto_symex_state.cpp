@@ -81,7 +81,34 @@ static bool is_immutable_value(const expr2tc &expr)
   const expr2tc *b = &expr;
   while (is_typecast2t(*b))
     b = &to_typecast2t(*b).from;
-  return is_symbol2t(*b);
+  if (is_symbol2t(*b) || is_constant_expr(*b))
+    return true;
+  // A pure bitvector computation over immutable leaves is itself an
+  // immutable value: the cell-packing idiom `(s2)(x & 0xFFFF)` /
+  // `(s2)((x >> 16) & 0xFFFF)` stores pieces of one symbol, and
+  // refusing it de-constants the whole containing aggregate exactly
+  // like a bare symbol did.
+  switch ((*b)->expr_id)
+  {
+  case expr2t::bitand_id:
+  case expr2t::bitor_id:
+  case expr2t::bitxor_id:
+  case expr2t::shl_id:
+  case expr2t::lshr_id:
+  case expr2t::ashr_id:
+  case expr2t::add_id:
+  case expr2t::sub_id:
+  {
+    bool ok = true;
+    (*b)->foreach_operand([&ok](const expr2tc &e) {
+      if (ok && !is_immutable_value(e))
+        ok = false;
+    });
+    return ok;
+  }
+  default:
+    return false;
+  }
 }
 
 bool goto_symex_statet::constant_propagation(const expr2tc &expr) const

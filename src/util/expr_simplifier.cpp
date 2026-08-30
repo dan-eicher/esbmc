@@ -1222,9 +1222,28 @@ expr2tc member2t::do_simplify() const
       // which member was initialized.
       const constant_union2t &uni = to_constant_union2t(source_value);
 
-      // Only the active union member can be simplified away.
+      // A cross-member read between INTEGER members of the same width is
+      // an exact bit reinterpretation: two's-complement integers of one
+      // width share their representation, so { .r=v }.s is (s-type)v.
+      // Without this fold the tagged-slot idiom never resolves — the
+      // dereference layer normalizes union accesses to the first member,
+      // so a value written via .r and read via .r still arrives here as
+      // a .s read of an .r-initialized literal. Anything wider, or any
+      // non-integer member, stays unfolded.
       if (uni.init_field != member)
+      {
+        if (uni.datatype_members.empty())
+          return expr2tc();
+        const expr2tc &val = uni.datatype_members[0];
+        if (
+          is_bv_type(type) && is_bv_type(val->type) &&
+          type->get_width() == val->type->get_width())
+        {
+          expr2tc cast = typecast2tc(type, val);
+          return try_simplification(cast);
+        }
         return expr2tc();
+      }
 
       // The value is always stored at position 0
       if (uni.datatype_members.empty())
@@ -5710,6 +5729,48 @@ expr2tc byte_extract2t::do_simplify() const
     const array_type2t &at = to_array_type(src->type);
     if (is_bv_type(at.subtype) && at.subtype->get_width() == type->get_width())
       return bitcast2tc(type, index2tc(at.subtype, src, off));
+
+    // A wider extract from a byte array — the struct-view-over-byte-pool
+    // idiom reading a u2/u4 field out of u1 storage — assembles from the
+    // per-byte indexes, which then fold individually when the array and
+    // offset are concrete. Without this the read stays an opaque
+    // byte_extract and everything data-dependent on the field (e.g. a
+    // dispatch walk keyed on a header-loaded class id) never folds.
+    // Restricted to a constant, fully in-bounds offset so the fold can
+    // never paper over the backend's out-of-bounds byte semantics.
+    if (
+      is_bv_type(at.subtype) && at.subtype->get_width() == 8 &&
+      type->get_width() % 8 == 0 && type->get_width() <= 64 &&
+      type->get_width() > 8 && is_constant_int2t(off) &&
+      !at.size_is_infinite && is_constant_int2t(at.array_size))
+    {
+      const BigInt &offv = to_constant_int2t(off).value;
+      const BigInt &sizev = to_constant_int2t(at.array_size).value;
+      unsigned nbytes = type->get_width() / 8;
+      if (
+        offv.is_uint64() && sizev.is_uint64() &&
+        offv.to_uint64() + nbytes <= sizev.to_uint64())
+      {
+        uint64_t off64 = offv.to_uint64();
+        type2tc acct = get_uint_type(type->get_width());
+        expr2tc acc;
+        for (unsigned k = 0; k < nbytes; k++)
+        {
+          // byte k sits at bits 8k (little-endian) or mirrored (big)
+          uint64_t byteidx = big_endian ? off64 + (nbytes - 1 - k)
+                                        : off64 + k;
+          expr2tc b = index2tc(
+            at.subtype, src, constant_int2tc(off->type, BigInt(byteidx)));
+          expr2tc wide = typecast2tc(acct, b);
+          if (k != 0)
+            wide = shl2tc(acct, wide, constant_int2tc(acct, BigInt(8 * k)));
+          acc = k == 0 ? wide : bitor2tc(acct, acc, wide);
+        }
+        expr2tc res =
+          acct == type ? acc : expr2tc(typecast2tc(type, acc));
+        return try_simplification(res);
+      }
+    }
   }
 
   if (is_constant_int2t(off) && type == get_uint8_type())

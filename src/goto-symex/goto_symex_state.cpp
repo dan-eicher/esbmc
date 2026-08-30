@@ -251,7 +251,9 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
       {
         const with2t &w = to_with2t(current);
 
-        if (!is_constant_expr(w.update_value))
+        if (
+          !is_constant_expr(w.update_value) &&
+          !is_immutable_value(w.update_value))
         {
           all_constant_updates = false;
           break;
@@ -298,10 +300,15 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
 
   if (is_constant_union2t(expr))
   {
+    // Like struct/array literals, a union literal may carry a
+    // (typecast) symbol as its initializing member: it is an immutable
+    // L2 value and reads of THAT member fold soundly. Cross-member
+    // reinterpretation stays with the same-field discipline the union
+    // with-chain enforces above.
     bool noconst = true;
 
     expr->foreach_operand([this, &noconst](const expr2tc &e) {
-      if (noconst && !constant_propagation(e))
+      if (noconst && !is_immutable_value(e) && !constant_propagation(e))
         noconst = false;
     });
     return noconst;

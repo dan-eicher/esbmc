@@ -221,9 +221,20 @@ void goto_symext::dereference(expr2tc &expr, dereferencet::modet mode)
 
   dereferencet dereference(ns, new_context, options, symex_dereference_state);
 
-  // needs to be renamed to level 1
+  // The storage spine needs level-1 names (the dereference layer keys
+  // value sets and lvalue identity on them), but VALUE positions —
+  // array indexes, and through rename_address's recursion any arithmetic
+  // feeding them — must be renamed to level 2 so known constants land
+  // before the byte-offset case-splits are built. A raw whole-expression
+  // level-1 rename left indexes unvalued: every a[i] store with a
+  // perfectly concrete i still dissected the enclosing object at byte
+  // granularity under guards over the unvalued name, and in nested
+  // calls over large structs those guarded whole-object equations
+  // dominated the formula. rename_address is the codebase's own
+  // discipline for exactly this split (and applies the realloc l1
+  // fixups the raw rename skipped).
   assert(!cur_state->call_stack.empty());
-  cur_state->top().level1.rename(expr);
+  cur_state->rename_address(expr);
 
   guard2tc guard;
   if (is_free(mode))

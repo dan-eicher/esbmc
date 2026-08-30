@@ -3594,11 +3594,78 @@ struct Equalitytor
   }
 };
 
+// Pointer-comparison constant folding. A comparison against the null
+// pointer is decidable whenever the other side is either also null or
+// provably a real object's address: in the memory model no object lives
+// at address zero, so `&sym == NULL` is false, as is
+// `(T*)((char*)&sym + k) == NULL` for an in-object constant offset.
+// Without this fold every `p == NULL` guard over a concrete pointer
+// stays symbolic, every assignment downstream of it becomes guarded,
+// constant propagation dies with it, and data-independent loops behind
+// such guards unroll into formulas that scale with the object size.
+static bool is_null_pointer_value(const expr2tc &e)
+{
+  const expr2tc *p = &e;
+  while (is_typecast2t(*p))
+    p = &to_typecast2t(*p).from;
+  if (is_symbol2t(*p) && to_symbol2t(*p).thename == "NULL")
+    return true;
+  if (is_constant_int2t(*p) && to_constant_int2t(*p).value.is_zero())
+    return true;
+  return false;
+}
+
+static bool is_provably_nonnull_pointer(const expr2tc &e)
+{
+  const expr2tc *p = &e;
+  while (is_typecast2t(*p))
+    p = &to_typecast2t(*p).from;
+  if (is_address_of2t(*p))
+    return true;
+  // &sym + k / k + &sym / &sym - k: object base plus a constant offset
+  if (is_add2t(*p))
+  {
+    const add2t &a = to_add2t(*p);
+    if (is_constant_int2t(a.side_2))
+      return is_provably_nonnull_pointer(a.side_1);
+    if (is_constant_int2t(a.side_1))
+      return is_provably_nonnull_pointer(a.side_2);
+  }
+  if (is_sub2t(*p))
+  {
+    const sub2t &s = to_sub2t(*p);
+    if (is_constant_int2t(s.side_2))
+      return is_provably_nonnull_pointer(s.side_1);
+  }
+  return false;
+}
+
+// Returns true/false constant when the pointer comparison is decidable,
+// nil otherwise. `eq` selects the polarity.
+static expr2tc
+simplify_pointer_null_cmp(const expr2tc &s1, const expr2tc &s2, bool eq)
+{
+  if (!is_pointer_type(s1) && !is_pointer_type(s2))
+    return expr2tc();
+  bool n1 = is_null_pointer_value(s1);
+  bool n2 = is_null_pointer_value(s2);
+  if (n1 && n2)
+    return eq ? gen_true_expr() : gen_false_expr();
+  if (
+    (n1 && is_provably_nonnull_pointer(s2)) ||
+    (n2 && is_provably_nonnull_pointer(s1)))
+    return eq ? gen_false_expr() : gen_true_expr();
+  return expr2tc();
+}
+
 expr2tc equality2t::do_simplify() const
 {
   // Self-comparison: x == x is always true (except for floats with NaN)
   if (side_1 == side_2 && !is_floatbv_type(side_1) && !is_floatbv_type(side_2))
     return gen_true_expr();
+
+  if (expr2tc r = simplify_pointer_null_cmp(side_1, side_2, true))
+    return r;
 
   // If we're dealing with floatbvs, call IEEE_equalitytor instead
   if (is_floatbv_type(side_1) || is_floatbv_type(side_2))
@@ -3822,6 +3889,9 @@ expr2tc notequal2t::do_simplify() const
   // Self-comparison: x != x is always false (except for floats with NaN)
   if (side_1 == side_2 && !is_floatbv_type(side_1) && !is_floatbv_type(side_2))
     return gen_false_expr();
+
+  if (expr2tc r = simplify_pointer_null_cmp(side_1, side_2, false))
+    return r;
 
   // If we're dealing with floatbvs, call IEEE_notequalitytor instead
   if (is_floatbv_type(side_1) || is_floatbv_type(side_2))

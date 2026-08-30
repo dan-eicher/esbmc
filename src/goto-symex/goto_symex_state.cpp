@@ -68,6 +68,22 @@ void goto_symex_statet::initialize(
   top().calling_location = symex_targett::sourcet(top().end_of_function, prog);
 }
 
+// A (possibly typecast) symbol is an immutable L2-renamed value: SSA
+// names and nondet symbols never change meaning after the point of
+// assignment, so a literal or update chain carrying one is as sound a
+// propagation value as a constant. Refusing it instead drops constant
+// tracking for the WHOLE containing aggregate -- one nondet stored
+// anywhere in a struct poisons every later member fold (loop bounds,
+// branch guards), and symex unrolls data-independent loops to the
+// unwind bound.
+static bool is_immutable_value(const expr2tc &expr)
+{
+  const expr2tc *b = &expr;
+  while (is_typecast2t(*b))
+    b = &to_typecast2t(*b).from;
+  return is_symbol2t(*b);
+}
+
 bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
 {
   if (is_array_type(expr))
@@ -179,7 +195,7 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
         if (
           !(is_number_type(uv->type) || is_bool_type(uv->type) ||
             is_pointer_type(uv->type)) ||
-          !constant_propagation(uv))
+          !(is_immutable_value(uv) || constant_propagation(uv)))
         {
           all_constant_updates = false;
           break;
@@ -202,7 +218,9 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
       while (is_with2t(current))
       {
         const with2t &w = to_with2t(current);
-        if (!constant_propagation(w.update_value))
+        if (
+          !is_immutable_value(w.update_value) &&
+          !constant_propagation(w.update_value))
         {
           all_constant_updates = false;
           break;
@@ -267,9 +285,18 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
     return false;
   }
 
-  if (
-    is_constant_struct2t(expr) || is_constant_union2t(expr) ||
-    is_constant_array2t(expr))
+  if (is_constant_struct2t(expr) || is_constant_array2t(expr))
+  {
+    // Elements may be (typecast) symbols -- see is_immutable_value.
+    bool ok = true;
+    expr->foreach_operand([this, &ok](const expr2tc &e) {
+      if (ok && !is_immutable_value(e) && !constant_propagation(e))
+        ok = false;
+    });
+    return ok;
+  }
+
+  if (is_constant_union2t(expr))
   {
     bool noconst = true;
 

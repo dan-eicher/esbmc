@@ -76,7 +76,7 @@ void goto_symex_statet::initialize(
 // anywhere in a struct poisons every later member fold (loop bounds,
 // branch guards), and symex unrolls data-independent loops to the
 // unwind bound.
-static bool is_immutable_value(const expr2tc &expr)
+bool is_immutable_value(const expr2tc &expr)
 {
   const expr2tc *b = &expr;
   while (is_typecast2t(*b))
@@ -170,6 +170,23 @@ bool goto_symex_statet::constant_propagation(const expr2tc &expr) const
     });
 
     return noconst;
+  }
+
+  // A comparison over immutable values is itself an immutable boolean:
+  // propagating it lets a goto guard symbol carry its defining
+  // condition, which path-guard subsumption at later branches resolves
+  // and matches against a callee's own re-check of the same condition.
+  if (
+    is_lessthan2t(expr) || is_greaterthan2t(expr) ||
+    is_lessthanequal2t(expr) || is_greaterthanequal2t(expr) ||
+    is_equality2t(expr) || is_notequal2t(expr))
+  {
+    bool ok = true;
+    expr->foreach_operand([&ok](const expr2tc &e) {
+      if (ok && !is_immutable_value(e))
+        ok = false;
+    });
+    return ok;
   }
 
   if (is_constant_array_of2t(expr))

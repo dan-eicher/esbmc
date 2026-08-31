@@ -23,6 +23,16 @@
 class execution_statet; // forward decl
 
 /**
+ *  Whether an expression is an immutable L2-renamed value: a (possibly
+ *  typecast) SSA symbol or constant, or a pure bitvector computation
+ *  (masks, shifts, add/sub) over such leaves. Such a value never
+ *  changes meaning after the point of assignment, so constant
+ *  propagation may carry it inside aggregates and the path-guard
+ *  subsumption copy chase may record it as a definition.
+ */
+bool is_immutable_value(const expr2tc &expr);
+
+/**
  *  Class for storing a particular threads state.
  *  This means storing information about its program counter, its call stack,
  *  the locality of all the variables in that stack, its execution guard, the

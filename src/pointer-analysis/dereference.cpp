@@ -797,6 +797,24 @@ expr2tc dereferencet::build_reference_to(
     return expr2tc();
   }
 
+  // A non-constant offset may still fold once symbol values are
+  // substituted: an inner dereference like f->sp feeding an index
+  // arrives here as an unrenamed member chain over the pointed-at
+  // object, which classifies the access as dynamic and routes it to
+  // the byte-stitching encoders over the WHOLE object — every read
+  // and write then drags a copy of the full aggregate into the SSA.
+  // Renaming resolves such chains to their current values (a no-op
+  // outside symex), and re-simplification collapses the offset to a
+  // constant whenever the program's indices are in fact concrete,
+  // letting the checks below and the reference builders take the
+  // member-wise paths.
+  simplify(final_offset);
+  if (!is_constant_int2t(final_offset))
+  {
+    dereference_callback.rename(final_offset);
+    simplify(final_offset);
+  }
+
   if (is_code_type(value) || is_code_type(type))
   {
     if (!check_code_access(value, final_offset, type, tmp_guard, mode))

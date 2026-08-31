@@ -1,4 +1,0 @@
-CORE
-main.c
---unwind 8 --no-unwinding-assertions --show-vcc
-^Generated \d+ VCC\(s\), 0 remaining after simplification \(\d+ assignments\)$

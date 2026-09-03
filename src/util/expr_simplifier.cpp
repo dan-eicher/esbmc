@@ -1384,15 +1384,14 @@ expr2tc pointer_offset2t::do_simplify() const
   // XXX - this could be better. But the current implementation catches most
   // cases that ESBMC produces internally.
 
-  if (is_symbol2t(ptr_obj) && to_symbol2t(ptr_obj).thename == "NULL")
+  if (
+    is_symbol2t(ptr_obj) && to_symbol2t(ptr_obj).thename == "NULL" &&
+    is_pointer_type(ptr_obj->type))
   {
-    if (is_pointer_type(ptr_obj->type))
-    {
-      const pointer_type2t &ptr_type = to_pointer_type(ptr_obj->type);
-      // Allow NULL simplification for pointer types to primitives
-      if (!is_symbol_type(ptr_type.subtype))
-        return gen_zero(type);
-    }
+    // The null pointer's offset is zero whatever the pointee type;
+    // excluding symbol-typed (named struct) subtypes left the offset
+    // unfolded on every null-guard over such pointers.
+    return gen_zero(type);
   }
 
   if (is_address_of2t(ptr_obj))
@@ -1509,10 +1508,16 @@ expr2tc pointer_offset2t::do_simplify() const
       to_constant_int2t(non_ptr_op).value.is_zero())
       return pointer_offset2tc(type, ptr_op);
 
-    // Can't do any kind of simplification if the ptr op has a symbolic type.
-    // Let the SMT layer handle this. In the future, can we pass around a
-    // namespace?
-    if (is_symbol_type(to_pointer_type(ptr_op->type).subtype))
+    // A named struct/union subtype arrives as a symbol type, which
+    // type_byte_size_expr resolves through the namespace. Only when no
+    // namespace is installed is the size unknowable here — leave that
+    // to the SMT layer. Bailing on every symbol type left
+    // pointer_offset(&arr_of_structs[0] + k) unfolded, and every field
+    // read through such a pointer became a symbolic-offset byte
+    // extract over the whole aggregate.
+    if (
+      is_symbol_type(to_pointer_type(ptr_op->type).subtype) &&
+      migrate_namespace_lookup == nullptr)
       return expr2tc();
 
     // Turn the pointer one into pointer_offset.
@@ -1560,7 +1565,11 @@ expr2tc pointer_offset2t::do_simplify() const
         to_constant_int2t(offset_op).value.is_zero())
         return pointer_offset2tc(type, ptr_op);
 
-      if (is_symbol_type(to_pointer_type(ptr_op->type).subtype))
+      // Symbol-typed subtypes resolve through the namespace; see the
+      // add arm above.
+      if (
+        is_symbol_type(to_pointer_type(ptr_op->type).subtype) &&
+        migrate_namespace_lookup == nullptr)
         return expr2tc();
 
       expr2tc ptr_offset = pointer_offset2tc(type, ptr_op);

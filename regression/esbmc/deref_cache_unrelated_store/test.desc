@@ -1,0 +1,5 @@
+CORE
+main.c
+--unwind 64 --no-unwinding-assertions
+^Generated 19 VCC\(s\), 2 remaining after simplification
+^VERIFICATION SUCCESSFUL$

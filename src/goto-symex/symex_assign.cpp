@@ -696,10 +696,9 @@ void goto_symext::symex_assign_symbol(
   expr2tc renamed_lhs = lhs;
   cur_state->rename_type(renamed_lhs);
 
-  // Before the state moves: a resolved dereference was derived from the value
-  // set this assignment is about to update.
-  invalidate_deref_cache(renamed_lhs);
-
+  // No cache work here: the assignment bumps the lhs's level-2
+  // generation, which is what deref_cache_lookup validates entries
+  // against.
   cur_state->assignment(renamed_lhs, rhs);
 
   // A guarded assignment wrapped rhs in an ite above, so only genuine

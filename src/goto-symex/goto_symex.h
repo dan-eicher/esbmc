@@ -214,9 +214,12 @@ protected:
    *  path guard -- a hit skips re-recording the claims, so reusing one taken
    *  under a weaker guard would drop a check.
    *
-   *  What the key cannot cover is the value set the resolution reads. Entries
-   *  are dropped instead whenever it may have moved: see
-   *  invalidate_deref_cache().
+   *  What the key cannot cover is the value set the resolution reads.
+   *  Each entry records the level-2 generation of every symbol its key
+   *  mentions; a hit is valid only while those generations are
+   *  unchanged, which the renamer already tracks per assignment. Frame
+   *  churn, DEAD, and value-set rewrites behind assignment()'s back
+   *  still clear the lot.
    */
   struct deref_cache_keyt
   {
@@ -254,16 +257,15 @@ protected:
     }
   };
 
-  std::unordered_map<deref_cache_keyt, expr2tc, deref_cache_hasht> deref_cache;
+  struct deref_cache_entryt
+  {
+    expr2tc result;
+    /** (symbol, level-2 generation at resolution time) pairs. */
+    std::vector<std::pair<expr2tc, unsigned>> deps;
+  };
 
-  /** Drop the entries an assignment to \p l1_lhs could have invalidated.
-   *
-   *  A write to a pointer moves the value set the cached resolution was
-   *  derived from, so every entry naming that symbol has to go. A write
-   *  *through* a pointer can retarget a pointer this never names, so it
-   *  clears the lot.
-   */
-  void invalidate_deref_cache(const expr2tc &l1_lhs);
+  std::unordered_map<deref_cache_keyt, deref_cache_entryt, deref_cache_hasht>
+    deref_cache;
 
   void clear_deref_cache()
   {

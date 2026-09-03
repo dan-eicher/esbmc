@@ -215,46 +215,6 @@ bool symex_dereference_statet::is_live_variable(const expr2tc &symbol)
   return false;
 }
 
-static bool expr_names_symbol(const expr2tc &e, const std::string &name)
-{
-  if (is_nil_expr(e))
-    return false;
-
-  if (is_symbol2t(e) && to_symbol2t(e).get_symbol_name() == name)
-    return true;
-
-  bool found = false;
-  e->foreach_operand([&found, &name](const expr2tc &op) {
-    found = found || expr_names_symbol(op, name);
-  });
-  return found;
-}
-
-void goto_symext::invalidate_deref_cache(const expr2tc &l1_lhs)
-{
-  if (deref_cache.empty())
-    return;
-
-  // A store through a pointer can retarget a pointer the keys never mention,
-  // so there is nothing finer to be done than dropping everything.
-  if (!is_symbol2t(l1_lhs))
-  {
-    deref_cache.clear();
-    return;
-  }
-
-  const std::string name = to_symbol2t(l1_lhs).get_symbol_name();
-  for (auto it = deref_cache.begin(); it != deref_cache.end();)
-  {
-    if (
-      expr_names_symbol(it->first.src, name) ||
-      expr_names_symbol(it->first.offset, name))
-      it = deref_cache.erase(it);
-    else
-      ++it;
-  }
-}
-
 void goto_symext::dereference(expr2tc &expr, dereferencet::modet mode)
 {
   symex_dereference_statet symex_dereference_state(*this, *cur_state);
@@ -312,6 +272,24 @@ goto_symext::deref_cache_keyt symex_dereference_statet::build_deref_key(
   return key;
 }
 
+/* The level-1 symbols a key expression mentions: the resolution was
+ * derived from their level-2 values, so their current generation
+ * numbers are what a hit must re-check. */
+static void collect_dep_symbols(const expr2tc &e, std::vector<expr2tc> &out)
+{
+  if (is_nil_expr(e))
+    return;
+
+  if (is_symbol2t(e))
+  {
+    out.push_back(e);
+    return;
+  }
+
+  e->foreach_operand(
+    [&out](const expr2tc &op) { collect_dep_symbols(op, out); });
+}
+
 bool symex_dereference_statet::deref_cache_lookup(
   const expr2tc &src,
   const type2tc &type,
@@ -326,7 +304,20 @@ bool symex_dereference_statet::deref_cache_lookup(
   if (it == goto_symex.deref_cache.end())
     return false;
 
-  out = it->second;
+  // Valid only while every symbol the resolution depended on is still
+  // at the level-2 generation it was resolved against; the renamer
+  // bumps these on every assignment, including the guarded per-object
+  // assignments a store through a pointer expands into.
+  for (const auto &dep : it->second.deps)
+  {
+    if (goto_symex.cur_state->level2.current_number(dep.first) != dep.second)
+    {
+      goto_symex.deref_cache.erase(it);
+      return false;
+    }
+  }
+
+  out = it->second.result;
   return true;
 }
 
@@ -338,6 +329,17 @@ void symex_dereference_statet::deref_cache_store(
   const expr2tc &guard,
   const expr2tc &result)
 {
+  goto_symext::deref_cache_entryt entry;
+  entry.result = result;
+
+  std::vector<expr2tc> deps;
+  collect_dep_symbols(src, deps);
+  collect_dep_symbols(offset, deps);
+  entry.deps.reserve(deps.size());
+  for (const expr2tc &sym : deps)
+    entry.deps.emplace_back(
+      sym, goto_symex.cur_state->level2.current_number(sym));
+
   goto_symex.deref_cache.emplace(
-    build_deref_key(src, type, mode_bits, offset, guard), result);
+    build_deref_key(src, type, mode_bits, offset, guard), std::move(entry));
 }
